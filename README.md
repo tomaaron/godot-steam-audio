@@ -42,6 +42,19 @@ don't have the time nor the money to support that, sorry.
 ### Getting started
 Check [Installation](https://github.com/stechyo/godot-steam-audio/wiki/Installation) for how to install the extension, [Project setup](https://github.com/stechyo/godot-steam-audio/wiki/Project-setup) for how to integrate it with your project, and [Contributing](https://github.com/stechyo/godot-steam-audio/wiki/Contributing) if you're interested in improving the extension.
 
+### Triggering a reflections bake in a scene
+You can bake reflections for a scene using the SteamAudioBakedReflections node and a small GDScript. This precomputes reflection data into a Resource that can be saved and reused.
+
+Steps:
+- Add a SteamAudioBakedReflections node to your scene.
+- Optionally add one or more SteamAudioProbe child nodes, or set the probe generation properties on the baker (probe_spacing, probe_height, probe_generation_extents) so it auto-generates probes.
+- Create or assign a SteamAudioBakedReflectionData resource to the baker’s baked_data property. This resource will store the baked bytes so it can be saved with your project.
+- From GDScript, call start_bake() and optionally monitor progress.
+
+Notes:
+- The baked data is saved into the assigned SteamAudioBakedReflectionData resource; make sure that resource is part of your project (saved to disk) so it persists.
+- The baker will generate probes automatically based on its properties and any SteamAudioProbe nodes under it.
+
 ### Acknowledgements
 godot-steam-audio is developed by [stechyo](https://github.com/stechyo). [<img src="https://github.com/gauravghongde/social-icons/blob/master/SVG/Color/Twitter.svg" width=14/>](https://twitter.com/stechyo_) [<img src="https://github.com/gauravghongde/social-icons/blob/master/SVG/Color/Youtube.svg" width=14/>](https://www.youtube.com/@Stechyo/)
 Check the [contributors](https://github.com/stechyo/godot-steam-audio/graphs/contributors) for other authors.

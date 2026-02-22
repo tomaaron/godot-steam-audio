@@ -1,5 +1,7 @@
 #include "register_types.hpp"
 
+#include "baked_reflection_data.hpp"
+#include "baked_reflections.hpp"
 #include "config.hpp"
 #include "geometry.hpp"
 #include "geometry_dynamic.hpp"
@@ -7,6 +9,7 @@
 #include "listener.hpp"
 #include "material.hpp"
 #include "player.hpp"
+#include "probe.hpp"
 #include "server.hpp"
 #include "stream.hpp"
 
@@ -33,6 +36,9 @@ void init_ext(ModuleInitializationLevel p_level) {
 		ClassDB::register_class<SteamAudioMaterial>();
 		ClassDB::register_class<SteamAudioConfig>();
 		ClassDB::register_class<SteamAudioPlayer>();
+		ClassDB::register_class<SteamAudioBakedReflections>();
+		ClassDB::register_class<SteamAudioBakedReflectionData>();
+		ClassDB::register_class<SteamAudioProbe>();
 	}
 
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
@@ -43,9 +49,11 @@ void init_ext(ModuleInitializationLevel p_level) {
 
 void uninit_ext(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
-		// Should call this to not leak, but thread->wait_for_finish() crashes...
-		// the program is exiting anyway so I'm not too concerned
-		// memdelete(srv);
+		// Properly destroy the singleton to avoid leaks (Thread, resources) on app quit.
+		if (srv) {
+			memdelete(srv);
+			srv = nullptr;
+		}
 	}
 }
 

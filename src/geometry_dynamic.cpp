@@ -65,22 +65,19 @@ void SteamAudioDynamicGeometry::process_internal(double delta) {
 		}
 	}
 
-	auto orig = get_global_transform().origin;
-	auto right = get_global_transform().get_basis().get_column(0);
-	auto up = get_global_transform().get_basis().get_column(1);
-	auto fwd = -get_global_transform().get_basis().get_column(2);
-
-	IPLMatrix4x4 new_trf{
-		{
-				{ right.x, right.y, right.z, orig.x },
-				{ up.x, up.y, up.z, orig.y },
-				{ fwd.x, fwd.y, fwd.z, orig.z },
-				{ 0., 0., 0., 1. },
-		}
-	};
+	// Build transform matrix using corrected conversion.
+	// Note: Steam Audio uses standard convention where forward is +Z, but Godot uses -Z.
+	// The matrix conversion handles basis vectors correctly; coordinate flipping (if needed)
+	// should be handled consistently across all matrix uses.
+	IPLMatrix4x4 new_trf = ipl_matrix_from(get_global_transform());
 
 	// TODO: check if it improves perf to skip this if the object does not move.
-	iplInstancedMeshUpdateTransform(mesh, SteamAudioServer::get_singleton()->get_global_state()->scene, new_trf);
+	SteamAudioServer *server = SteamAudioServer::get_singleton();
+	if (server == nullptr) {
+		return;
+	}
+	iplInstancedMeshUpdateTransform(mesh, server->get_global_state()->scene, new_trf);
+	server->notify_scene_dirty();
 }
 
 Ref<SteamAudioMaterial> SteamAudioDynamicGeometry::get_material() { return mat; }

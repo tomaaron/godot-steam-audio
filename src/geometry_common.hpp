@@ -29,6 +29,10 @@ inline IPLStaticMesh godot_mesh_to_ipl_mesh(Ref<Mesh> mesh, IPLScene scene, IPLM
 	std::vector<IPLTriangle> ipl_tris(tris.size() / 3);
 	std::vector<IPLint32> ipl_mat_indices(tris.size() / 3);
 
+	// Apply the provided Transform3D to move mesh vertices into the world (or
+	// desired) space before handing them to Steam Audio. Steam Audio expects
+	// positions in the simulation space; Godot stores vertices in local mesh
+	// space, so this transform is necessary and not redundant.
 	for (int j = 0; j < verts.size(); j++) {
 		Vector3 vert = verts[j];
 		vert = trf.basis.xform(vert);
@@ -37,7 +41,8 @@ inline IPLStaticMesh godot_mesh_to_ipl_mesh(Ref<Mesh> mesh, IPLScene scene, IPLM
 	}
 
 	for (int j = 0; j < tris.size(); j += 3) {
-		// godot tris are cw, ipl tris are ccw
+		// Godot triangle winding is clockwise; Steam Audio expects counter-clockwise.
+		// Flip to maintain correct face orientation and normals in simulation.
 		ipl_tris[j / 3].indices[0] = tris[j];
 		ipl_tris[j / 3].indices[1] = tris[j + 2];
 		ipl_tris[j / 3].indices[2] = tris[j + 1];

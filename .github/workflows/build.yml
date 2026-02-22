@@ -57,6 +57,12 @@ jobs:
         id: vars
         run: |
           echo "COMMIT_SHORT_SHA=$(git rev-parse --short ${{ github.sha }})" >> $GITHUB_ENV
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r23c
+          add-to-path: true
+          link-to-sdk: true
       - uses: actions/setup-python@v5
       - name: install-deps
         run: |

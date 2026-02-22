@@ -17,6 +17,9 @@ private:
 	// since the player has stopped (even though the playback still mixes...)
 	Ref<AudioStreamPlayback> pb;
 
+	// Stop playback and release inner/outer stream references.
+	void release_streams();
+
 	// TODO: we can probably move these values inside local state
 	// for cleanup and the ability to adjust them at runtime
 	SteamAudioSourceConfig cfg{
@@ -40,6 +43,11 @@ private:
 	LocalSteamAudioState local_state;
 	std::atomic<bool> is_local_state_init;
 	std::atomic<bool> can_load_local_state;
+
+	// When true, this source is treated as a Baked Static Source, allowing
+	// the engine to use STATICSOURCE baked reflections for this source
+	// (matching the Unity plugin's "Baked Static Source" option).
+	bool baked_static_source = false;
 
 	void init_local_state();
 

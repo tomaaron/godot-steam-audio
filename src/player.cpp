@@ -65,6 +65,12 @@ void SteamAudioPlayer::_bind_methods() {
 	ADD_GROUP("Reflection", "");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "reflection"), "set_reflection_on", "is_reflection_on");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "max_reflection_distance", PROPERTY_HINT_RANGE, "0.0,20000.0,0.1"), "set_max_reflection_distance", "get_max_reflection_distance");
+
+	// Baked Static Source flag (matches Unity's checkbox). When true and a STATICSOURCE
+	// baked layer is present, the server may use STATICSOURCE baked reflections for this source.
+	ClassDB::bind_method(D_METHOD("is_baked_static_source"), &SteamAudioPlayer::is_baked_static_source);
+	ClassDB::bind_method(D_METHOD("set_baked_static_source", "p_baked_static_source"), &SteamAudioPlayer::set_baked_static_source);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "baked_static_source"), "set_baked_static_source", "is_baked_static_source");
 }
 
 SteamAudioPlayer::SteamAudioPlayer() {
@@ -84,10 +90,46 @@ SteamAudioPlayer::SteamAudioPlayer() {
 			new_stream->set_stream(get_stream());
 		}
 		this->set_stream(new_stream);
+	} else {
+		// Ensure the wrapper keeps a valid back-reference after scene reloads.
+		str->parent = this;
 	}
 }
+// Stop playback and release inner/outer stream references.
+void SteamAudioPlayer::release_streams() {
+	// 1) Stop playback on the node FIRST so AudioServer releases its live playback.
+	if (is_playing()) {
+		stop();
+	}
+
+	// 2) Detach the outer stream and clear inner stream to break remaining refs.
+	Ref<AudioStream> outer = get_stream();
+	if (outer.is_valid()) {
+		if (auto *sas = dynamic_cast<SteamAudioStream *>(outer.ptr())) {
+			sas->set_stream(Ref<AudioStream>());
+		}
+		set_stream(Ref<AudioStream>());
+	}
+
+	// 3) Finally clear any cached playback Ref and break back-reference.
+	if (!pb.is_null()) {
+		if (auto *playback = dynamic_cast<SteamAudioStreamPlayback *>(pb.ptr())) {
+			// Ensure the wrapper playback immediately releases its inner
+			// AudioStreamPlayback (e.g., MP3) and inner stream before we drop
+			// our ref, even if AudioServer still holds a reference.
+			playback->_stop();
+			playback->parent = nullptr;
+		}
+		pb = Ref<AudioStreamPlayback>();
+	}
+}
+
 SteamAudioPlayer::~SteamAudioPlayer() {
 	SteamAudio::log(SteamAudio::log_debug, "destroying player");
+	// Always release playback/stream references first to avoid resource leaks on quit.
+	release_streams();
+
+	// If local state was never initialized, we can return after releasing streams.
 	if (!is_local_state_init.load()) {
 		return;
 	}
@@ -96,26 +138,38 @@ SteamAudioPlayer::~SteamAudioPlayer() {
 
 	is_local_state_init.store(false);
 	can_load_local_state.store(false);
-	SteamAudioServer::get_singleton()->remove_local_state(&local_state);
 
-	is_local_state_init.store(false);
-	auto gs = SteamAudioServer::get_singleton()->get_global_state();
+	// Guard server access, as the server singleton may already be destroyed during shutdown.
+	SteamAudioServer *server = SteamAudioServer::get_singleton();
+	GlobalSteamAudioState *gs = nullptr;
+	if (server) {
+		server->remove_local_state(&local_state);
+		gs = server->get_global_state(false);
+	}
 
-	iplSourceRemove(local_state.src.src, gs->sim);
-	iplSourceRelease(&local_state.src.src);
-	iplDirectEffectRelease(&local_state.fx.direct);
+	if (gs && gs->sim && gs->ctx) {
+		iplSourceRemove(local_state.src.src, gs->sim);
+		iplSourceRelease(&local_state.src.src);
+		// Release per-source DSP effects.
+		iplDirectEffectRelease(&local_state.fx.direct);
+		iplReflectionEffectRelease(&local_state.fx.refl);
+		iplReflectionEffectRelease(&local_state.fx.refl_param);
+		iplAmbisonicsDecodeEffectRelease(&local_state.fx.dec);
+		iplAmbisonicsDecodeEffectRelease(&local_state.fx.refl_dec);
+		iplAmbisonicsEncodeEffectRelease(&local_state.fx.enc);
 
-	iplAudioBufferFree(gs->ctx, &local_state.bufs.in);
-	iplAudioBufferFree(gs->ctx, &local_state.bufs.direct);
-	iplAudioBufferFree(gs->ctx, &local_state.bufs.ambi);
-	iplAudioBufferFree(gs->ctx, &local_state.bufs.out);
-	iplAudioBufferFree(gs->ctx, &local_state.bufs.mono);
-	iplAudioBufferFree(gs->ctx, &local_state.bufs.refl_ambi);
-	iplAudioBufferFree(gs->ctx, &local_state.bufs.refl_out);
-
-	if (!pb.is_null()) {
-		auto playback = dynamic_cast<SteamAudioStreamPlayback *>(pb.ptr());
-		playback->parent = nullptr;
+		iplAudioBufferFree(gs->ctx, &local_state.bufs.in);
+		iplAudioBufferFree(gs->ctx, &local_state.bufs.direct);
+		iplAudioBufferFree(gs->ctx, &local_state.bufs.ambi);
+		iplAudioBufferFree(gs->ctx, &local_state.bufs.out);
+		iplAudioBufferFree(gs->ctx, &local_state.bufs.mono);
+		iplAudioBufferFree(gs->ctx, &local_state.bufs.refl_ambi);
+		iplAudioBufferFree(gs->ctx, &local_state.bufs.refl_out);
+	} else {
+		// If global state is already gone, at least null out the pointers we own.
+		local_state.src.src = nullptr;
+		local_state.fx = {};
+		local_state.bufs = {};
 	}
 }
 
@@ -153,6 +207,15 @@ void SteamAudioPlayer::init_local_state() {
 	refl_effect_cfg.numChannels = ambisonic_channels_from(local_state.cfg.ambisonics_order);
 	iplReflectionEffectCreate(gs->ctx, &gs->audio_cfg, &refl_effect_cfg, &local_state.fx.refl);
 
+	// Create a dedicated PARAMETRIC reflection effect instance for baked/parametric reverb
+	IPLReflectionEffectSettings refl_param_cfg{};
+	refl_param_cfg.type = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
+	// For PARAMETRIC, Steam Audio expects stereo output.
+	refl_param_cfg.numChannels = 2;
+	// irSize is not used by parametric, but initialize to a sensible frame count.
+	refl_param_cfg.irSize = int(SteamAudioConfig::max_refl_duration * float(gs->audio_cfg.samplingRate));
+	iplReflectionEffectCreate(gs->ctx, &gs->audio_cfg, &refl_param_cfg, &local_state.fx.refl_param);
+
 	local_state.fx.dec = create_ambisonics_decode_effect(
 			gs->ctx, gs->audio_cfg, gs->hrtf);
 	local_state.fx.refl_dec = create_ambisonics_decode_effect(
@@ -183,6 +246,19 @@ void SteamAudioPlayer::_notification(int p_what) {
 		case NOTIFICATION_PROCESS:
 			process_internal(get_process_delta_time());
 			break;
+		case NOTIFICATION_EXIT_TREE:
+			// On regular scene teardown, stop playback but DO NOT clear user-assigned streams.
+			// Clearing streams here causes the inspector's stream reference to be lost across
+			// scene switches. We only fully release streams at pre-delete/destruction.
+			if (is_playing()) {
+				stop();
+			}
+			pb = Ref<AudioStreamPlayback>();
+			break;
+		case NOTIFICATION_PREDELETE:
+			// As a final safeguard, ensure all references are gone before deletion.
+			release_streams();
+			break;
 	}
 }
 
@@ -210,10 +286,20 @@ void SteamAudioPlayer::ready_internal() {
 		}
 		set_stream(new_stream);
 		str = new_stream.ptr();
+	}
+	// Ensure wrapper has correct parent reference even if it already existed.
+	if (str) {
 		str->parent = this;
-		if (is_autoplay_enabled()) {
-			play();
-		}
+	}
+
+	// Force early local-state initialization so DSP path is ready before playback
+	// to avoid missing reflections/reverb on first frames.
+	get_local_state();
+
+	// Robust autoplay: always start playback here if enabled and not already playing,
+	// regardless of whether the stream was newly wrapped or already wrapped.
+	if (is_autoplay_enabled() && !is_playing()) {
+		play();
 	}
 
 	if (cfg.ambisonics_order > SteamAudioConfig::max_ambisonics_order) {
@@ -234,8 +320,13 @@ void SteamAudioPlayer::process_internal(double delta) {
 		set_attenuation_model(ATTENUATION_DISABLED);
 	}
 
-	if (is_playing() && !get_stream_playback().is_null()) {
-		pb = get_stream_playback();
+	if (is_playing()) {
+		if (!get_stream_playback().is_null()) {
+			pb = get_stream_playback();
+		}
+	} else {
+		// If not playing, don't keep a stale cached playback reference.
+		pb = Ref<AudioStreamPlayback>();
 	}
 }
 
@@ -322,6 +413,8 @@ void SteamAudioPlayer::set_air_absorption_model_type(IPLAirAbsorptionModelType p
 
 bool SteamAudioPlayer::is_reflection_on() { return cfg.is_reflection_on; }
 void SteamAudioPlayer::set_reflection_on(bool p_reflection_on) { cfg.is_reflection_on = p_reflection_on; }
+bool SteamAudioPlayer::is_baked_static_source() { return baked_static_source; }
+void SteamAudioPlayer::set_baked_static_source(bool p_baked_static_source) { baked_static_source = p_baked_static_source; }
 bool SteamAudioPlayer::is_occlusion_on() { return cfg.is_occlusion_on; }
 void SteamAudioPlayer::set_occlusion_on(bool p_occlusion_on) { cfg.is_occlusion_on = p_occlusion_on; }
 

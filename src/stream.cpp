@@ -10,7 +10,10 @@
 #include <godot_cpp/core/property_info.hpp>
 
 SteamAudioStream::SteamAudioStream() {}
-SteamAudioStream::~SteamAudioStream() {}
+SteamAudioStream::~SteamAudioStream() {
+	// Ensure we don't hold on to an inner stream at destruction.
+	stream = Ref<AudioStream>();
+}
 
 void SteamAudioStream::_bind_methods() {}
 
@@ -30,7 +33,11 @@ Ref<AudioStream> SteamAudioStream::get_stream() { return this->stream; }
 // SteamAudioStreamPlayback
 
 SteamAudioStreamPlayback::SteamAudioStreamPlayback() {}
-SteamAudioStreamPlayback::~SteamAudioStreamPlayback() {}
+SteamAudioStreamPlayback::~SteamAudioStreamPlayback() {
+	// Stop and release inner playback/stream to avoid leaks on quit.
+	_stop();
+	parent = nullptr;
+}
 
 int32_t SteamAudioStreamPlayback::_mix(AudioFrame *buffer, float rate_scale, int32_t frames) {
 	if (parent == nullptr) {
@@ -130,19 +137,58 @@ int32_t SteamAudioStreamPlayback::_mix(AudioFrame *buffer, float rate_scale, int
 	}
 
 	gs->refl_ir_lock.lock();
-	if (ls->refl_outputs.ir != nullptr && ls->cfg.is_reflection_on) {
+	if (ls->cfg.is_reflection_on) {
+		// Prepare mono input for reflections (both convolution and parametric expect mono in)
 		iplAudioBufferDownmix(gs->ctx, &ls->bufs.in, &ls->bufs.mono);
-		ls->refl_outputs.numChannels = ambisonic_channels_from(ls->cfg.ambisonics_order);
-		ls->refl_outputs.type = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
-		ls->refl_outputs.irSize = int(SteamAudioConfig::max_refl_duration * float(gs->audio_cfg.samplingRate));
-		iplReflectionEffectApply(ls->fx.refl, &ls->refl_outputs, &ls->bufs.mono, &ls->bufs.refl_ambi, nullptr);
 
-		iplAmbisonicsDecodeEffectApply(
-				ls->fx.refl_dec, &dec_params,
-				&ls->bufs.refl_ambi, &ls->bufs.refl_out);
+		if (ls->refl_outputs.type == IPL_REFLECTIONEFFECTTYPE_CONVOLUTION) {
+			if (ls->refl_outputs.ir != nullptr && ls->refl_outputs.irSize > 0) {
+				iplReflectionEffectApply(ls->fx.refl, &ls->refl_outputs, &ls->bufs.mono, &ls->bufs.refl_ambi, nullptr);
+				iplAmbisonicsDecodeEffectApply(
+						ls->fx.refl_dec, &dec_params,
+						&ls->bufs.refl_ambi, &ls->bufs.refl_out);
 
-		SteamAudio::log(SteamAudio::log_debug, "mixing: mixing reflection and direct buffers");
-		iplAudioBufferMix(gs->ctx, &ls->bufs.refl_out, &ls->bufs.out);
+				SteamAudio::log(SteamAudio::log_debug, "mixing: mixing convolution reflections and direct buffers");
+
+				// Attenuate baked listener-centric reverb using transmission.
+				// Realtime reflections are already ray-traced through geometry and don't need this.
+				if (ls->using_global_reverb) {
+					// Compute overall gain from smoothed per-band transmission values
+					float sum = 0.0f;
+					float max_gain = 0.0f;
+					for (int b = 0; b < IPL_NUM_BANDS; ++b) {
+						sum += ls->reverb_send_band_gain[b];
+						if (ls->reverb_send_band_gain[b] > max_gain)
+							max_gain = ls->reverb_send_band_gain[b];
+					}
+					float mean_gain = sum / float(IPL_NUM_BANDS);
+					const float mean_weight = 0.8f;
+					float overall_gain = mean_gain * mean_weight + max_gain * (1.0f - mean_weight);
+
+					// Fallback to direct transmission if smoothed gains haven't converged
+					if (overall_gain >= 0.999f) {
+						float sum_t = 0.0f;
+						for (int b = 0; b < IPL_NUM_BANDS; ++b)
+							sum_t += ls->direct_outputs.transmission[b];
+						overall_gain = sum_t / float(IPL_NUM_BANDS);
+					}
+
+					// Scale reflection output in-place
+					if (overall_gain < 0.999f) {
+						for (int ch = 0; ch < ls->bufs.refl_out.numChannels; ++ch) {
+							for (int s = 0; s < ls->bufs.refl_out.numSamples; ++s) {
+								ls->bufs.refl_out.data[ch][s] *= overall_gain;
+							}
+						}
+					}
+				}
+				iplAudioBufferMix(gs->ctx, &ls->bufs.refl_out, &ls->bufs.out);
+			}
+		} else if (ls->refl_outputs.type == IPL_REFLECTIONEFFECTTYPE_PARAMETRIC) {
+			iplReflectionEffectApply(ls->fx.refl_param, &ls->refl_outputs, &ls->bufs.mono, &ls->bufs.refl_out, nullptr);
+			SteamAudio::log(SteamAudio::log_debug, "mixing: mixing parametric reflections and direct buffers");
+			iplAudioBufferMix(gs->ctx, &ls->bufs.refl_out, &ls->bufs.out);
+		}
 	}
 	gs->refl_ir_lock.unlock();
 
@@ -186,11 +232,19 @@ void SteamAudioStreamPlayback::_start(double from_pos) {
 }
 
 void SteamAudioStreamPlayback::_stop() {
+	// Mark inactive first to prevent further mixing.
 	is_active.store(false);
-	if (stream_playback == nullptr || !stream_playback->is_playing()) {
-		return;
+	if (stream_playback.is_valid()) {
+		if (stream_playback->is_playing()) {
+			stream_playback->stop();
+		}
+		// Release reference to the inner playback.
+		stream_playback = Ref<AudioStreamPlayback>();
 	}
-	stream_playback->stop();
+	// Also drop reference to the inner stream.
+	if (stream.is_valid()) {
+		stream = Ref<AudioStream>();
+	}
 }
 
 bool SteamAudioStreamPlayback::_is_playing() const { return is_active; }

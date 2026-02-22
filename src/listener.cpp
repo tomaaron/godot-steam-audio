@@ -19,6 +19,11 @@ void SteamAudioListener::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_refl_ambisonics_order"), &SteamAudioListener::get_refl_ambisonics_order);
 	ClassDB::bind_method(D_METHOD("set_refl_ambisonics_order", "p_refl_ambisonics_order"), &SteamAudioListener::set_refl_ambisonics_order);
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "reflection_ambisonics_order", PROPERTY_HINT_RANGE, "0,5,1"), "set_refl_ambisonics_order", "get_refl_ambisonics_order");
+
+	// Reflection/Reverb Type selection like Unity/UE (Auto/Realtime/Baked)
+	ClassDB::bind_method(D_METHOD("get_reflection_mode"), &SteamAudioListener::get_reflection_mode);
+	ClassDB::bind_method(D_METHOD("set_reflection_mode", "p_mode"), &SteamAudioListener::set_reflection_mode);
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "reflection_type", PROPERTY_HINT_ENUM, "Auto,Realtime,Baked"), "set_reflection_mode", "get_reflection_mode");
 }
 
 void SteamAudioListener::ready_internal() {

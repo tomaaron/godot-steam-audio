@@ -2,7 +2,7 @@
 #include "config.hpp"
 #include "godot_cpp/variant/utility_functions.hpp"
 
-void SteamAudio::log(GodotSteamAudioLogLevel lvl, const char *str) {
+void SteamAudio::log(GodotSteamAudioLogLevel lvl, const String &str) {
 	if (lvl < SteamAudioConfig::log_level) {
 		return;
 	}

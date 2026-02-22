@@ -12,3 +12,5 @@ project/addons/godot-steam-audio/bin/*.dylib
 project/addons/godot-steam-audio/bin/android/arm64/libphonon.so
 project/addons/godot-steam-audio/bin/android/x86_64/libphonon.so
 src/gen/*
+godot-steam-audio-demo/
+godot-steam-audio/
