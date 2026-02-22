@@ -93,6 +93,9 @@ public:
 	bool is_reflection_on();
 	void set_reflection_on(bool p_reflection_on);
 
+	bool is_baked_static_source();
+	void set_baked_static_source(bool p_baked_static_source);
+
 	bool is_occlusion_on();
 	void set_occlusion_on(bool p_occlusion_on);
 
