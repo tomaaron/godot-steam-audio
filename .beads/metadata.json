@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "godot_steam_audio",
+  "project_id": "44a4085c-1d5c-4be6-9e68-a6372089eee9"
+}
