@@ -55,7 +55,8 @@ bool SteamAudioServer::is_tick_ready() const {
 	if (!is_global_state_init.load()) {
 		return false;
 	}
-	if (listener == nullptr) {
+	std::lock_guard<std::mutex> tick_lock(self->tick_mux);
+	if (listener == nullptr || !listener->is_inside_tree()) {
 		return false;
 	}
 	return true;
@@ -558,14 +559,17 @@ void SteamAudioServer::run_refl_sim() {
 }
 
 void SteamAudioServer::add_listener(SteamAudioListener *lis) {
+	std::lock_guard<std::mutex> lock(self->tick_mux);
 	self->listener = lis;
 }
 
 void SteamAudioServer::add_local_state(LocalSteamAudioState *ls) {
+	std::lock_guard<std::mutex> lock(self->tick_mux);
 	self->local_states.push_back(ls);
 }
 
 void SteamAudioServer::remove_local_state(LocalSteamAudioState *ls) {
+	std::lock_guard<std::mutex> lock(self->tick_mux);
 	auto it = std::find(local_states.begin(), local_states.end(), ls);
 	if (it == local_states.end()) {
 		return;

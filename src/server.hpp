@@ -29,6 +29,7 @@ private:
 	std::atomic<int> ticks_after_clear{ 0 }; // Skip fetching outputs briefly after clearing baked reflections
 	std::mutex init_mux;
 	std::mutex refl_mux;
+	std::mutex tick_mux;
 	std::condition_variable cv;
 
 	// meshes to add to the global state scene after it's initialized.
